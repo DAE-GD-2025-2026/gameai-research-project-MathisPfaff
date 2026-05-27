@@ -277,4 +277,5 @@ It works by:
 ## Credits
 
 Source and Images: [AI Decision Making with Utility Scores, Part 1](https://mcguirev10.com/2019/01/03/ai-decision-making-with-utility-scores-part-1.html)
+
 Source: [GameAIPro_Chapter09_An_Introduction_to_Utility_Theory](https://www.gameaipro.com/GameAIPro/GameAIPro_Chapter09_An_Introduction_to_Utility_Theory.pdf?utm_source=openai)
