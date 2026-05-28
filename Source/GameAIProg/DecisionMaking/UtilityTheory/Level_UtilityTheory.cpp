@@ -28,6 +28,15 @@ void ALevel_UtilityTheory::BeginPlay()
     PursuitAction = Brain.AddAction(std::make_unique<UAPursuitAction>());
     EvadeAction   = Brain.AddAction(std::make_unique<UAEvadeAction>());
     WanderAction  = Brain.AddAction(std::make_unique<UAWanderAction>());
+
+    if (SeekAgent)
+    {
+        SeekAgent->SetMaxLinearSpeed(SeekAgentSpeed);
+    }
+    if (UtilityAgent)
+    {
+        UtilityAgent->SetMaxLinearSpeed(UtilityAgentSpeed);
+    }
 }
 
 void ALevel_UtilityTheory::Tick(float DeltaTime)
@@ -43,24 +52,26 @@ void ALevel_UtilityTheory::Tick(float DeltaTime)
         m_SeekBehavior.SetTarget(SeekMouseTarget);
     }
 
+    DrawImGui();
+
     // --- Freeze timer ---
     if (bUtilityAgentFrozen)
     {
         FreezeTimer -= DeltaTime;
+
+        // Zero velocity every tick so steering can't creep back in
+        UtilityAgent->GetCharacterMovement()->Velocity = FVector::ZeroVector;
+        UtilityAgent->GetCharacterMovement()->StopMovementImmediately();
+
         if (FreezeTimer <= 0.f)
-        {
             bUtilityAgentFrozen = false;
-            // Brain will re-assign the behavior on next Update call
-        }
-        // Skip AI update while frozen — agent stands still
-        return;
+
+        return;  // skip AI update
     }
 
     CheckTagging();
     UpdateContexts();
     Brain.Update(*UtilityAgent, DeltaTime);
-
-    DrawImGui();
 }
 
 void ALevel_UtilityTheory::UpdateContexts()
@@ -86,7 +97,6 @@ void ALevel_UtilityTheory::UpdateContexts()
 
     // Update wander
     WanderAction->Context.NormalizedDistanceToSeeker = NormDist;
-    WanderAction->Context.bIsIt                     = !bSeekAgentIsIt;
 }
 
 void ALevel_UtilityTheory::CheckTagging()
@@ -117,87 +127,108 @@ void ALevel_UtilityTheory::DrawImGui()
     ImGui::SetNextWindowSize(WindowSize);
     ImGui::Begin("Utility Theory Debug");
 
-    // --- Tag state header ---
-    ImGui::TextColored(ImVec4(1,1,0,1), "Tag State");
-    ImGui::Text("SeekAgent is 'it': %s", bSeekAgentIsIt ? "YES" : "NO");
-    ImGui::Text("UtilityAgent is 'it': %s", !bSeekAgentIsIt ? "YES" : "NO");
-    if (bUtilityAgentFrozen)
+    // =========================================================
+    // SECTION: Settings  (add new agent/world sliders here)
+    // =========================================================
+    if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 1.f, 1.f), "FROZEN: %.1fs left", FreezeTimer);
-    }
-    ImGui::Separator();
-
-    // --- helper lambda to draw one action block ---
-    auto DrawAction = [&](const char* ActionName, float TotalScore, bool bIsActive,
-                          const std::vector<std::pair<std::string, float>>& ConsiderationScores)
-    {
-        // Color the action header: green=active, white=inactive
-        if (bIsActive)
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.f, 0.2f, 1.f));
-        else
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
-
-        bool bOpen = ImGui::TreeNode(ActionName);
-        ImGui::PopStyleColor();
-
-        // Total score bar next to the label (same line trick via indented ProgressBar)
-        ImGui::SameLine(120);
-        // Bar color: green if active, blue otherwise
-        ImVec4 BarColor = bIsActive ? ImVec4(0.2f, 0.9f, 0.2f, 1.f) : ImVec4(0.2f, 0.4f, 0.9f, 1.f);
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, BarColor);
-        char BarLabel[32];
-        FCStringAnsi::Snprintf(BarLabel, sizeof(BarLabel), "%.2f", TotalScore);
-        ImGui::ProgressBar(TotalScore, ImVec2(-1, 14), BarLabel);
-        ImGui::PopStyleColor();
-
-        if (bOpen)
+        if (ImGui::SliderFloat("SeekAgent Speed",    &SeekAgentSpeed,    100.f, 1000.f, "%.0f"))
         {
-            ImGui::Indent(8.f);
-            for (auto& [Name, Score] : ConsiderationScores)
-            {
-                ImGui::Text("%-20s", Name.c_str());
-                ImGui::SameLine(140);
-
-                // Score color: green>0.6, yellow>0.3, red otherwise
-                ImVec4 CColor = Score > 0.6f
-                    ? ImVec4(0.2f, 1.f, 0.2f, 1.f)
-                    : Score > 0.3f
-                        ? ImVec4(1.f, 0.85f, 0.f, 1.f)
-                        : ImVec4(1.f, 0.3f, 0.3f, 1.f);
-
-                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, CColor);
-                char CLabel[32];
-                FCStringAnsi::Snprintf(CLabel, sizeof(CLabel), "%.2f", Score);
-                ImGui::ProgressBar(Score, ImVec2(-1, 12), CLabel);
-                ImGui::PopStyleColor();
-            }
-            ImGui::Unindent(8.f);
-            ImGui::TreePop();
+            if (SeekAgent) SeekAgent->SetMaxLinearSpeed(SeekAgentSpeed);
         }
-    };
-
-    // --- Draw each action ---
-    ImGui::TextColored(ImVec4(1,1,0,1), "Actions");
+        if (ImGui::SliderFloat("Utility Agent Speed", &UtilityAgentSpeed, 100.f, 1000.f, "%.0f"))
+        {
+            if (UtilityAgent) UtilityAgent->SetMaxLinearSpeed(UtilityAgentSpeed);
+        }
+        if (TrimWorld)
+        {
+            ImGui::Checkbox("World Trimming", &TrimWorld->bShouldTrimWorld);
+        }
+    }
     ImGui::Spacing();
 
-    bool bPursuitActive = (strcmp(Brain.GetCurrentActionName(), "Pursuit") == 0);
-    bool bEvadeActive   = (strcmp(Brain.GetCurrentActionName(), "Evade")   == 0);
-    bool bWanderActive  = (strcmp(Brain.GetCurrentActionName(), "Wander")  == 0);
+    // =========================================================
+    // SECTION: Tag State
+    // =========================================================
+    if (ImGui::CollapsingHeader("Tag State", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Text("SeekAgent is 'it':    %s", bSeekAgentIsIt  ? "YES" : "NO");
+        ImGui::Text("UtilityAgent is 'it': %s", !bSeekAgentIsIt ? "YES" : "NO");
+        if (bUtilityAgentFrozen)
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 1.f, 1.f), "FROZEN: %.1fs left", FreezeTimer);
 
-    auto PursuitScores = PursuitAction->GetConsiderationScores();
-    auto EvadeScores   = EvadeAction->GetConsiderationScores();
-    auto WanderScores  = WanderAction->GetConsiderationScores();
+        float Dist = FVector::Dist(SeekAgent->GetActorLocation(), UtilityAgent->GetActorLocation());
+        ImGui::Text("Raw distance:  %.0f", Dist);
+        ImGui::Text("Norm distance: %.2f", FMath::Clamp(Dist / MaxRelevantDistance, 0.f, 1.f));
+    }
 
-    // Convert to pair<string,float> for the lambda
-    auto ToVec = [](auto& Src) {
-        std::vector<std::pair<std::string,float>> Out;
-        for (auto& D : Src) Out.emplace_back(D.Name, D.Score);
-        return Out;
-    };
+    ImGui::Spacing();
 
-    DrawAction("Pursuit", PursuitAction->Score(), bPursuitActive, ToVec(PursuitScores));
-    DrawAction("Evade",   EvadeAction->Score(),   bEvadeActive,   ToVec(EvadeScores));
-    DrawAction("Wander",  WanderAction->Score(),  bWanderActive,  ToVec(WanderScores));
+    // =========================================================
+    // SECTION: Utility Scores  (don't touch this when adding settings)
+    // =========================================================
+    if (ImGui::CollapsingHeader("Utility Scores", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        auto DrawAction = [&](const char* ActionName, float TotalScore, bool bIsActive,
+                              const std::vector<std::pair<std::string, float>>& ConsiderationScores)
+        {
+            if (bIsActive)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.f, 0.2f, 1.f));
+            else
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
+
+            bool bOpen = ImGui::TreeNode(ActionName);
+            ImGui::PopStyleColor();
+
+            ImGui::SameLine(120);
+            ImVec4 BarColor = bIsActive ? ImVec4(0.2f, 0.9f, 0.2f, 1.f) : ImVec4(0.2f, 0.4f, 0.9f, 1.f);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, BarColor);
+            char BarLabel[32];
+            FCStringAnsi::Snprintf(BarLabel, sizeof(BarLabel), "%.2f", TotalScore);
+            ImGui::ProgressBar(TotalScore, ImVec2(-1, 14), BarLabel);
+            ImGui::PopStyleColor();
+
+            if (bOpen)
+            {
+                ImGui::Indent(8.f);
+                for (auto& [Name, Score] : ConsiderationScores)
+                {
+                    ImGui::Text("%-20s", Name.c_str());
+                    ImGui::SameLine(140);
+                    ImVec4 CColor = Score > 0.6f
+                        ? ImVec4(0.2f, 1.f,  0.2f, 1.f)
+                        : Score > 0.3f
+                            ? ImVec4(1.f,  0.85f, 0.f,  1.f)
+                            : ImVec4(1.f,  0.3f,  0.3f, 1.f);
+                    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, CColor);
+                    char CLabel[32];
+                    FCStringAnsi::Snprintf(CLabel, sizeof(CLabel), "%.2f", Score);
+                    ImGui::ProgressBar(Score, ImVec2(-1, 12), CLabel);
+                    ImGui::PopStyleColor();
+                }
+                ImGui::Unindent(8.f);
+                ImGui::TreePop();
+            }
+        };
+
+        bool bPursuitActive = (strcmp(Brain.GetCurrentActionName(), "Pursuit") == 0);
+        bool bEvadeActive   = (strcmp(Brain.GetCurrentActionName(), "Evade")   == 0);
+        bool bWanderActive  = (strcmp(Brain.GetCurrentActionName(), "Wander")  == 0);
+
+        auto ToVec = [](auto& Src) {
+            std::vector<std::pair<std::string,float>> Out;
+            for (auto& D : Src) Out.emplace_back(D.Name, D.Score);
+            return Out;
+        };
+
+        auto PursuitScores = PursuitAction->GetConsiderationScores();
+        auto EvadeScores   = EvadeAction->GetConsiderationScores();
+        auto WanderScores  = WanderAction->GetConsiderationScores();
+
+        DrawAction("Pursuit", PursuitAction->Score(), bPursuitActive, ToVec(PursuitScores));
+        DrawAction("Evade",   EvadeAction->Score(),   bEvadeActive,   ToVec(EvadeScores));
+        DrawAction("Wander",  WanderAction->Score(),  bWanderActive,  ToVec(WanderScores));
+    }
 
     ImGui::End();
 }

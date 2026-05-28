@@ -50,4 +50,7 @@ private:
 	float TagFreezeTime     = 2.f;
 	float FreezeTimer       = 0.f;
 	bool  bUtilityAgentFrozen = false;  // only freeze the utility agent (the one being chased)
+	
+	float SeekAgentSpeed    = 400.f;
+	float UtilityAgentSpeed = 300.f;
 };

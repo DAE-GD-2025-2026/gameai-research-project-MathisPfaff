@@ -229,31 +229,23 @@ private:
 struct FWanderContext
 {
     float NormalizedDistanceToSeeker = 1.f;
-    bool  bIsIt                      = false;
 };
 
 class UAWanderAction : public IUtilityAction
 {
 public:
-    FWanderContext                          Context;
-    std::vector<TConsideration<FWanderContext>> Considerations;
+    FWanderContext                               Context;
+    std::vector<TConsideration<FWanderContext>>  Considerations;
 
     UAWanderAction()
     {
         Name = "Wander";
 
-        // Hard gate: only wander when NOT "it"
-        Considerations.push_back({
-            "NotIsIt",
-            [](const FWanderContext& c){ return c.bIsIt ? 0.f : 1.f; },
-            UtilityCurves::Linear()
-        });
-        // High score when seeker is FAR — linear: distance 0→score 0, distance 1→score 1
-        // This means: "I don't see the seeker, go searching/roaming"
+        // High score when seeker is FAR — "no one around, go searching"
         Considerations.push_back({
             "SeekerFar",
             [](const FWanderContext& c){ return c.NormalizedDistanceToSeeker; },
-            UtilityCurves::Linear()   // <-- was SmoothStep, now plain Linear
+            UtilityCurves::Linear()
         });
     }
 
