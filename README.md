@@ -257,7 +257,149 @@ Important design choices include:
 
 ## Basic Implementation
 
-*[to be added]*
+### Context and Considerations
+
+I used a generic `TConsideration` structure that stores:
+
+- the name of the consideration
+- a function that reads a raw value from the action context
+- and the type of curve used to shape that value
+
+```c++ name=Source/GameAIProg/DecisionMaking/UtilityTheory/UtilityAction.h url=https://github.com/DAE-GD-2025-2026/gameai-research-project-MathisPfaff/blob/4ac40cc6cd4c7464d8db3b3a6f2768f674b66dbe/Source/GameAIProg/DecisionMaking/UtilityTheory/UtilityAction.h#L56-L67
+template<typename TContext>
+struct TConsideration
+{
+    std::string                           Name;
+    std::function<float(const TContext&)> GetRawValue;
+    ECurveType                            CurveType = ECurveType::Linear;
+
+    float Evaluate(const TContext& Ctx) const
+    {
+        return EvaluateCurve(CurveType, GetRawValue(Ctx));
+    }
+};
+```
+
+Each action can define its own context type and its own considerations while still using the same scoring logic.
+
+### Curves
+
+To change influence of each consideration, I added some curves types such as:
+
+- Linear
+- InverseLinear
+- SmoothStep
+- SineCurve
+- Cosine
+- Exponential
+- Logarithmic
+
+These are evaluated in `EvaluateCurve()`.  
+This lets the system control how a value should grow depending on how the action should behave.
+
+```c++ name=Source/GameAIProg/DecisionMaking/UtilityTheory/UtilityAction.h url=https://github.com/DAE-GD-2025-2026/gameai-research-project-MathisPfaff/blob/4ac40cc6cd4c7464d8db3b3a6f2768f674b66dbe/Source/GameAIProg/DecisionMaking/UtilityTheory/UtilityAction.h#L12-L49
+enum class ECurveType : uint8_t
+{
+    Linear,
+    InverseLinear,
+    SmoothStep,
+    SineCurve,
+    Cosine,
+    Exponential,
+    Logarithmic,
+};
+
+inline float EvaluateCurve(ECurveType T, float x)
+{
+    float t = FMath::Clamp(x, 0.f, 1.f);
+    switch (T) {
+    case ECurveType::Linear:        return t;
+    case ECurveType::InverseLinear: return 1.f - t;
+    case ECurveType::SmoothStep:    return t * t * (3.f - 2.f * t);
+    case ECurveType::SineCurve:     return (1.f - FMath::Cos(t * PI)) * 0.5f;
+    case ECurveType::Cosine:        return FMath::Sin(t * PI * 0.5f);
+    case ECurveType::Exponential:   return FMath::Pow(t, 2.f);
+    case ECurveType::Logarithmic:   return FMath::Clamp(FMath::Loge(1.f + t * 9.f) / FMath::Loge(10.f), 0.f, 1.f);
+    default:                        return t;
+    }
+}
+```
+
+Because the system works with an enum, adding curves fairly easy.
+
+### Combining Considerations
+
+To calculate the final utility of an action, I multiply all consideration scores together and apply a small compensation factor.  
+This helps prevent actions with multiple considerations from becoming too weak too quickly.
+
+```c++ name=Source/GameAIProg/DecisionMaking/UtilityTheory/UtilityAction.h url=https://github.com/DAE-GD-2025-2026/gameai-research-project-MathisPfaff/blob/4ac40cc6cd4c7464d8db3b3a6f2768f674b66dbe/Source/GameAIProg/DecisionMaking/UtilityTheory/UtilityAction.h#L84-L96
+template<typename TContext>
+static float CalcScore(const std::vector<TConsideration<TContext>>& Considerations,
+                       const TContext& Ctx)
+{
+    if (Considerations.empty()) return 0.f;
+    float total = 1.f;
+    for (auto& c : Considerations)
+        total *= c.Evaluate(Ctx);
+
+    float mod = 1.f - (1.f / static_cast<float>(Considerations.size()));
+    return FMath::Clamp(total + total * mod * (1.f - total), 0.f, 1.f);
+}
+```
+
+### Example Action: Pursuit
+
+One example action in my implementation is **Pursuit**.  
+This action uses its own context:
+
+- `NormalizedProximityToPlayer`
+- `bIsIt`
+
+The action should score high when the agent is **it** and when the target is close.
+
+```c++ name=Source/GameAIProg/DecisionMaking/UtilityTheory/UtilityAction.h url=https://github.com/DAE-GD-2025-2026/gameai-research-project-MathisPfaff/blob/4ac40cc6cd4c7464d8db3b3a6f2768f674b66dbe/Source/GameAIProg/DecisionMaking/UtilityTheory/UtilityAction.h#L104-L135
+struct FPursuitContext
+{
+    float NormalizedProximityToPlayer = 0.f;
+    bool  bIsIt                      = false;
+};
+
+class UAPursuitAction : public IUtilityAction
+{
+public:
+    FPursuitContext Context;
+    std::vector<TConsideration<FPursuitContext>> Considerations;
+
+    UAPursuitAction()
+    {
+        Name = "Pursuit";
+
+        Considerations.push_back({
+            "IsIt",
+            [](const FPursuitContext& c){ return c.bIsIt ? 1.f : 0.f; },
+            ECurveType::Linear
+        });
+
+        Considerations.push_back({
+            "TargetClose",
+            [](const FPursuitContext& c){ return c.NormalizedProximityToPlayer; },
+            ECurveType::SineCurve
+        });
+    }
+
+    float Score() const override { return CalcScore(Considerations, Context); }
+};
+```
+
+### Summary of the Implementation
+
+1. each action has its own context
+2. considerations read values from that context
+3. curves transform those values into scores
+4. `CalcScore()` combines them into one utility value
+5. and the AI can compare actions based on those scores
+
+This structure makes the system modular and easy to expand with new actions and new considerations.
 
 ---
 
