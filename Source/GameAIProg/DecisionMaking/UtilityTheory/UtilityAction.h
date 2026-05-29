@@ -7,45 +7,45 @@
 #include <string>
 
 // ---------------------------------------------------------------------------
-// Curve helpers — plain lambdas, use them inline when adding considerations
+// Curve helpers
 // ---------------------------------------------------------------------------
-namespace UtilityCurves
+enum class ECurveType : uint8_t
 {
-    // score rises as x rises  (0→0, 1→1)
-    inline auto Linear()
-    {
-        return [](float x) { return FMath::Clamp(x, 0.f, 1.f); };
-    }
+    Linear,
+    InverseLinear,
+    SmoothStep,
+    SineCurve,
+    Cosine,
+    Exponential,
+    Logarithmic,
+};
 
-    // score falls as x rises  (0→1, 1→0)  — good for "the closer, the higher"
-    inline auto InverseLinear()
-    {
-        return [](float x) { return 1.f - FMath::Clamp(x, 0.f, 1.f); };
+inline const char* CurveTypeName(ECurveType T)
+{
+    switch (T) {
+    case ECurveType::Linear:        return "Linear";
+    case ECurveType::InverseLinear: return "InverseLinear";
+    case ECurveType::SmoothStep:    return "SmoothStep";
+    case ECurveType::SineCurve:     return "SineCurve";
+    case ECurveType::Cosine:        return "Cosine";
+    case ECurveType::Exponential:   return "Exponential";
+    case ECurveType::Logarithmic:   return "Logarithmic";
+    default:                        return "Unknown";
     }
+}
 
-    // smooth ease in/out
-    inline auto SmoothStep()
-    {
-        return [](float x) {
-            float t = FMath::Clamp(x, 0.f, 1.f);
-            return t * t * (3.f - 2.f * t);
-        };
-    }
-
-    // peaks at mid-range, low at extremes  — good for "medium distance"
-    inline auto SineCurve()
-    {
-        return [](float x) {
-            return FMath::Sin(FMath::Clamp(x, 0.f, 1.f) * PI);
-        };
-    }
-
-    // rises sharply at high values
-    inline auto Exponential(float exp = 2.f)
-    {
-        return [exp](float x) {
-            return FMath::Pow(FMath::Clamp(x, 0.f, 1.f), exp);
-        };
+inline float EvaluateCurve(ECurveType T, float x)
+{
+    float t = FMath::Clamp(x, 0.f, 1.f);
+    switch (T) {
+    case ECurveType::Linear:        return t;
+    case ECurveType::InverseLinear: return 1.f - t;
+    case ECurveType::SmoothStep:    return t * t * (3.f - 2.f * t);
+    case ECurveType::SineCurve:     return (1.f - FMath::Cos(t * PI)) * 0.5f;
+    case ECurveType::Cosine:        return FMath::Sin(t * PI * 0.5f);
+    case ECurveType::Exponential:   return FMath::Pow(t, 2.f);
+    case ECurveType::Logarithmic:   return FMath::Clamp(FMath::Loge(1.f + t * 9.f) / FMath::Loge(10.f), 0.f, 1.f);
+    default:                        return t;
     }
 }
 
@@ -56,13 +56,13 @@ namespace UtilityCurves
 template<typename TContext>
 struct TConsideration
 {
-    std::string                          Name;
-    std::function<float(const TContext&)> GetRawValue;   // reads world data
-    std::function<float(float)>           Curve;          // shapes the score
+    std::string                           Name;
+    std::function<float(const TContext&)> GetRawValue;
+    ECurveType                            CurveType = ECurveType::Linear;
 
     float Evaluate(const TContext& Ctx) const
     {
-        return FMath::Clamp(Curve(GetRawValue(Ctx)), 0.f, 1.f);
+        return EvaluateCurve(CurveType, GetRawValue(Ctx));
     }
 };
 
@@ -103,7 +103,7 @@ static float CalcScore(const std::vector<TConsideration<TContext>>& Consideratio
 // ---------------------------------------------------------------------------
 struct FPursuitContext
 {
-    float NormalizedDistanceToPlayer = 1.f;  // 0=touching, 1=max range
+    float NormalizedProximityToPlayer = 0.f;  // 0=far, 1=touching
     bool  bIsIt                      = false; // is this agent currently "it"?
 };
 
@@ -121,13 +121,13 @@ public:
         Considerations.push_back({
             "IsIt",
             [](const FPursuitContext& c){ return c.bIsIt ? 1.f : 0.f; },
-            UtilityCurves::Linear()
+            ECurveType::Linear
         });
         // High score when target is CLOSE — inverse: distance 0→score 1, distance 1→score 0
         Considerations.push_back({
             "TargetClose",
-            [](const FPursuitContext& c){ return c.NormalizedDistanceToPlayer; },
-            UtilityCurves::InverseLinear()
+            [](const FPursuitContext& c){ return c.NormalizedProximityToPlayer; },
+            ECurveType::SineCurve
         });
     }
 
@@ -167,7 +167,7 @@ private:
 // ---------------------------------------------------------------------------
 struct FEvadeContext
 {
-    float NormalizedDistanceToSeeker = 1.f; // 0=touching, 1=max range
+    float NormalizedProximityToSeeker = 0.f;  // 0=far, 1=touching
     bool  bIsIt                      = false;
 };
 
@@ -185,13 +185,13 @@ public:
         Considerations.push_back({
             "NotIsIt",
             [](const FEvadeContext& c){ return c.bIsIt ? 0.f : 1.f; },
-            UtilityCurves::Linear()
+            ECurveType::Linear
         });
         // Score spikes when seeker is dangerously close (smooth so it feels urgent)
         Considerations.push_back({
             "SeekerProximity",
-            [](const FEvadeContext& c){ return c.NormalizedDistanceToSeeker; },
-            UtilityCurves::InverseLinear()   // swap to SmoothStep for a snappier feel
+            [](const FEvadeContext& c){ return c.NormalizedProximityToSeeker; },
+            ECurveType::Exponential
         });
     }
 
@@ -228,7 +228,7 @@ private:
 // ---------------------------------------------------------------------------
 struct FWanderContext
 {
-    float NormalizedDistanceToSeeker = 1.f;
+    float NormalizedDistanceToPlayer = 1.f;
 };
 
 class UAWanderAction : public IUtilityAction
@@ -241,11 +241,11 @@ public:
     {
         Name = "Wander";
 
-        // High score when seeker is FAR — "no one around, go searching"
+        // High score when no one is around
         Considerations.push_back({
             "SeekerFar",
-            [](const FWanderContext& c){ return c.NormalizedDistanceToSeeker; },
-            UtilityCurves::Linear()
+            [](const FWanderContext& c){ return c.NormalizedDistanceToPlayer; },
+            ECurveType::SmoothStep
         });
     }
 

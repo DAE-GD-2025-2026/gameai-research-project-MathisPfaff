@@ -163,38 +163,46 @@ SteeringOutput Evade::CalculateSteering(float DeltaT, ASteeringAgent& Agent)
 {
 	SteeringOutput steering{};
 	Agent.SetIsAutoOrienting(true);
-	float const evadeDistance {500.f};
-	
+	float const evadeDistance {800.f}; // increased from 500 so it reacts earlier
+
 	FVector2D toTarget = Target.Position - Agent.GetPosition();
-	float const timeToTarget = toTarget.Length() / Agent.GetMaxLinearSpeed();
-	
+
+	// Use combined speeds for a more accurate prediction time
+	float pursuerSpeed = Target.LinearVelocity.Length();
+	float combinedSpeed = Agent.GetMaxLinearSpeed() + (pursuerSpeed > 0.f ? pursuerSpeed : Agent.GetMaxLinearSpeed());
+	float const timeToTarget = toTarget.Length() / combinedSpeed;
+
 	FVector2D predictedPosition = Target.Position + Target.LinearVelocity * timeToTarget;
-	
-	if (toTarget.Length() < evadeDistance)
+
+	// Check distance to PREDICTED position, not current position
+	FVector2D toPredicted = predictedPosition - Agent.GetPosition();
+
+	if (toPredicted.Length() < evadeDistance)
 	{
+		// Flee from the predicted position
 		steering.LinearVelocity = Agent.GetPosition() - predictedPosition;
 	}
 	else
 	{
-		return steering;
+		// Fall back to fleeing from current position instead of doing nothing
+		steering.LinearVelocity = Agent.GetPosition() - Target.Position;
 	}
-	
+
 	if (Agent.GetDebugRenderingEnabled())
 	{
 		DrawDebugCircle(Agent.GetWorld(), FVector(Agent.GetPosition(), 0), evadeDistance, 16,
-			FColor::Orange, false, -1.f, 0,2.f, 
+			FColor::Orange, false, -1.f, 0, 2.f,
 			FVector(0, 1, 0), FVector(1, 0, 0), false);
-		
+
 		DrawDebugPoint(Agent.GetWorld(), FVector(predictedPosition, 0), 10.f, FColor::Red);
-		DrawDebugLine(Agent.GetWorld(), FVector(Agent.GetPosition(), 0), 
+		DrawDebugLine(Agent.GetWorld(), FVector(Agent.GetPosition(), 0),
 			FVector(Agent.GetPosition(), 0) + Agent.GetVelocity() / 3, FColor::Green);
-		DrawDebugLine(Agent.GetWorld(), FVector(Agent.GetPosition(), 0), 
+		DrawDebugLine(Agent.GetWorld(), FVector(Agent.GetPosition(), 0),
 			FVector(Agent.GetPosition(), 0) + Agent.GetActorForwardVector() * 60, FColor::Magenta);
 	}
-	
+
 	return steering;
 }
-
 //WANDER
 //*******
 SteeringOutput Wander::CalculateSteering(float DeltaT, ASteeringAgent& Agent)

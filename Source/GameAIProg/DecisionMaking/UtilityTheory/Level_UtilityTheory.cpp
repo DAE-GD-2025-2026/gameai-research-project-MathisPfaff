@@ -1,6 +1,11 @@
 #include "Level_UtilityTheory.h"
 #include "Kismet/GameplayStatics.h"
 
+static const ECurveType AllCurves[] = {
+    ECurveType::Linear, ECurveType::InverseLinear, ECurveType::SmoothStep,
+    ECurveType::SineCurve, ECurveType::Cosine, ECurveType::Exponential, ECurveType::Logarithmic
+};
+
 ALevel_UtilityTheory::ALevel_UtilityTheory()
 {
     PrimaryActorTick.bCanEverTick = true;
@@ -59,7 +64,6 @@ void ALevel_UtilityTheory::Tick(float DeltaTime)
     {
         FreezeTimer -= DeltaTime;
 
-        // Zero velocity every tick so steering can't creep back in
         UtilityAgent->GetCharacterMovement()->Velocity = FVector::ZeroVector;
         UtilityAgent->GetCharacterMovement()->StopMovementImmediately();
 
@@ -78,13 +82,14 @@ void ALevel_UtilityTheory::UpdateContexts()
 {
     float RawDist = FVector::Dist(SeekAgent->GetActorLocation(), UtilityAgent->GetActorLocation());
     float NormDist = FMath::Clamp(RawDist / MaxRelevantDistance, 0.f, 1.f);
-
+    float NormProximity = 1.f - NormDist;
+    
     // Update pursuit: target IS the seek agent (SeekAgent is chasing, utility agent pursues back if it becomes "it")
     FTargetData PursuitTarget;
     PursuitTarget.Position       = FVector2D(SeekAgent->GetActorLocation());
     PursuitTarget.LinearVelocity = SeekAgent->GetLinearVelocity();
     PursuitAction->SetTarget(PursuitTarget);
-    PursuitAction->Context.NormalizedDistanceToPlayer = NormDist;
+    PursuitAction->Context.NormalizedProximityToPlayer = NormProximity;
     PursuitAction->Context.bIsIt                     = !bSeekAgentIsIt; // utility agent is "it" when SeekAgent is not
 
     // Update evade: evade the seek agent
@@ -92,11 +97,11 @@ void ALevel_UtilityTheory::UpdateContexts()
     EvadeTarget.Position       = FVector2D(SeekAgent->GetActorLocation());
     EvadeTarget.LinearVelocity = SeekAgent->GetLinearVelocity();
     EvadeAction->SetTarget(EvadeTarget);
-    EvadeAction->Context.NormalizedDistanceToSeeker = NormDist;
+    EvadeAction->Context.NormalizedProximityToSeeker = NormProximity;
     EvadeAction->Context.bIsIt                     = !bSeekAgentIsIt;
 
     // Update wander
-    WanderAction->Context.NormalizedDistanceToSeeker = NormDist;
+    WanderAction->Context.NormalizedDistanceToPlayer = NormDist;
 }
 
 void ALevel_UtilityTheory::CheckTagging()
@@ -128,7 +133,7 @@ void ALevel_UtilityTheory::DrawImGui()
     ImGui::Begin("Utility Theory Debug");
 
     // =========================================================
-    // SECTION: Settings  (add new agent/world sliders here)
+    // SECTION: Settings
     // =========================================================
     if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_DefaultOpen))
     {
@@ -165,21 +170,20 @@ void ALevel_UtilityTheory::DrawImGui()
     ImGui::Spacing();
 
     // =========================================================
-    // SECTION: Utility Scores  (don't touch this when adding settings)
+    // SECTION: Utility Scores
     // =========================================================
     if (ImGui::CollapsingHeader("Utility Scores", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        auto DrawAction = [&](const char* ActionName, float TotalScore, bool bIsActive,
-                              const std::vector<std::pair<std::string, float>>& ConsiderationScores)
+        auto DrawAction = [&](const char* ActionName, float TotalScore, bool bIsActive, auto* Action)
         {
             if (bIsActive)
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.f, 0.2f, 1.f));
             else
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
-
+        
             bool bOpen = ImGui::TreeNode(ActionName);
             ImGui::PopStyleColor();
-
+        
             ImGui::SameLine(120);
             ImVec4 BarColor = bIsActive ? ImVec4(0.2f, 0.9f, 0.2f, 1.f) : ImVec4(0.2f, 0.4f, 0.9f, 1.f);
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, BarColor);
@@ -187,13 +191,15 @@ void ALevel_UtilityTheory::DrawImGui()
             FCStringAnsi::Snprintf(BarLabel, sizeof(BarLabel), "%.2f", TotalScore);
             ImGui::ProgressBar(TotalScore, ImVec2(-1, 14), BarLabel);
             ImGui::PopStyleColor();
-
+        
             if (bOpen)
             {
                 ImGui::Indent(8.f);
-                for (auto& [Name, Score] : ConsiderationScores)
+                for (auto& C : Action->Considerations)
                 {
-                    ImGui::Text("%-20s", Name.c_str());
+                    float Score = C.Evaluate(Action->Context);
+        
+                    ImGui::Text("%-20s", C.Name.c_str());
                     ImGui::SameLine(140);
                     ImVec4 CColor = Score > 0.6f
                         ? ImVec4(0.2f, 1.f,  0.2f, 1.f)
@@ -205,6 +211,23 @@ void ALevel_UtilityTheory::DrawImGui()
                     FCStringAnsi::Snprintf(CLabel, sizeof(CLabel), "%.2f", Score);
                     ImGui::ProgressBar(Score, ImVec2(-1, 12), CLabel);
                     ImGui::PopStyleColor();
+        
+                    // Curve dropdown — sits right under the bar for this consideration
+                    std::string ComboId = C.Name + "##curve";
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::BeginCombo(ComboId.c_str(), CurveTypeName(C.CurveType)))
+                    {
+                        for (ECurveType Curve : AllCurves)
+                        {
+                            bool bSelected = (C.CurveType == Curve);
+                            if (ImGui::Selectable(CurveTypeName(Curve), bSelected))
+                                C.CurveType = Curve;
+                            if (bSelected)
+                                ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::Spacing();
                 }
                 ImGui::Unindent(8.f);
                 ImGui::TreePop();
@@ -215,19 +238,13 @@ void ALevel_UtilityTheory::DrawImGui()
         bool bEvadeActive   = (strcmp(Brain.GetCurrentActionName(), "Evade")   == 0);
         bool bWanderActive  = (strcmp(Brain.GetCurrentActionName(), "Wander")  == 0);
 
-        auto ToVec = [](auto& Src) {
-            std::vector<std::pair<std::string,float>> Out;
-            for (auto& D : Src) Out.emplace_back(D.Name, D.Score);
-            return Out;
-        };
-
         auto PursuitScores = PursuitAction->GetConsiderationScores();
         auto EvadeScores   = EvadeAction->GetConsiderationScores();
         auto WanderScores  = WanderAction->GetConsiderationScores();
-
-        DrawAction("Pursuit", PursuitAction->Score(), bPursuitActive, ToVec(PursuitScores));
-        DrawAction("Evade",   EvadeAction->Score(),   bEvadeActive,   ToVec(EvadeScores));
-        DrawAction("Wander",  WanderAction->Score(),  bWanderActive,  ToVec(WanderScores));
+        
+        DrawAction("Pursuit", PursuitAction->Score(), bPursuitActive, PursuitAction);
+        DrawAction("Evade",   EvadeAction->Score(),   bEvadeActive,   EvadeAction);
+        DrawAction("Wander",  WanderAction->Score(),  bWanderActive,  WanderAction);
     }
 
     ImGui::End();
