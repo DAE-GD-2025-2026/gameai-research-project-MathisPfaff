@@ -154,7 +154,7 @@ private:
     float EvadeRadius     = 500.f;   // PS: threat must be within this to trigger evade
     int32 RescueThreshold = 3;       // PS: frozen teammates needed before rescue takes priority
     float MaxRelevantDist = 1500.f;  // utility: distance at which proximity normalizes to 0
-    float RescueRadius    = 400.f;   // utility: search radius for FrozenTeammateNearby
+    float RescueRadius    = 700.f;   // utility: search radius for FrozenTeammateNearby
 
     float TeamASpeed = 250.f;
     float TeamBSpeed = 250.f;
